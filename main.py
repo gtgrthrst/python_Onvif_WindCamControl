@@ -308,7 +308,7 @@ def process_wind_data():
             print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f} degrees ({direction_name})")
         else:
             return  # 如果没有数据则返回
-
+    #測試
     preset_number = bearing_to_direction(average_bearing)
     #go_to_preset(preset_number)
     #print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f}")
