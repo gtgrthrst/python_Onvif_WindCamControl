@@ -28,6 +28,8 @@ client = None
 wind_history = []
 global camera, profile_token   # 宣告全域變量
 profile_token = 1
+wind_readings = []  # 用於存儲每分鐘內收集的風向數據
+lock = Lock()  # 用於線程安全地訪問風向數據
 
 
 # 全局變量，用於存儲相機和PTZ服務
@@ -35,6 +37,9 @@ camera = None
 ptz_service = None
 profile_token = 1#
 profile_token = None
+
+camera_lat = None
+camera_lon = None
 
 def initialize_camera():
     global camera, ptz_service, profile_token
@@ -45,10 +50,12 @@ def initialize_camera():
         ptz_service = camera.create_ptz_service()
         if not ptz_service:
             raise Exception("Failed to create PTZ service")
+
         print("Camera and PTZ service initialized successfully")
     except Exception as e:
         ui.notify(f"Failed to initialize camera: {str(e)}", type='negative')
         print(f"Failed to initialize camera: {str(e)}")
+
 
 def go_to_preset(preset_number):
     global camera, ptz_service, profile_token
@@ -64,7 +71,7 @@ def go_to_preset(preset_number):
         request.ProfileToken = profile_token
         request.PresetToken = str(preset_number)
         ptz_service.GotoPreset(request)
-        ui.notify(f'Moved to Preset {preset_number}', type='positive')
+        ui.notify(f'Moved to Preset {preset_number}based on average wind direction {average_bearing:.2f} degrees ({direction_name}', type='positive')
     except Exception as e:
         ui.notify(f'Error moving to preset {preset_number}: {str(e)}', type='negative')
         print(f'Error moving to preset {preset_number}: {str(e)}')  # Log to console for debugging
@@ -76,6 +83,7 @@ lock = Lock()
 
 # 檢查資料庫檔案是否存在
 db_file = 'C:/Users/AHB0222_R7-7840HS/OneDrive/00重要文件/成大碩士/06部落格/000創客/23-專案/04-風向攝影機/NiceGUI/wind_data.db'
+#db_file = './wind_data.db'  
 if os.path.isfile(db_file):
     # 連接到現有的資料庫檔案
     conn = sqlite3.connect(db_file, check_same_thread=False)
@@ -248,28 +256,62 @@ def save_data(timestamp, raw_direction, direction_text):
 def on_message(client, userdata, msg):
     try:
         raw_direction = int(msg.payload.decode())
-        direction_text = direction_to_text(raw_direction)
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        new_data = {'timestamp': timestamp, 'raw_direction': raw_direction, 'direction_text': direction_text}
-        
-        # 使用線程安全的函數保存數據
-        save_data(timestamp, raw_direction, direction_text)
-        
-        # 更新風向顯示
-        wind_direction.set_text(str(raw_direction) + '° ' + direction_text)
-        
-        # 更新表格數據
-        wind_history.append(new_data)
-        if len(wind_history) > 20:  # 檢查列表長度是否超過1000
-            wind_history.pop(0)  # 移除列表中的第一個元素，即最舊的數據
 
-        table.update_rows(reversed(wind_history))  # 更新表格以顯示最新的數據
+        # 將風向數據添加到全局列表中以計算平均值
+        with lock:
+            wind_readings.append(raw_direction)
+
+        # 更新UI和資料庫的邏輯保持不變
+        direction_text = direction_to_text(raw_direction)
+        new_data = {'timestamp': timestamp, 'raw_direction': raw_direction, 'direction_text': direction_text}
+        save_data(timestamp, raw_direction, direction_text)
+        wind_direction.set_text(f"{raw_direction}° {direction_text}")
+        wind_history.append(new_data)
+        if len(wind_history) > 20:
+            wind_history.pop(0)
+        table.update_rows(reversed(wind_history))
+        update_plot(raw_direction)
 
     except ValueError:
         print("Received non-integer value from MQTT.")
     except Exception as e:
         print(f"Error processing message: {e}")
 
+import math
+
+def process_wind_data():
+    global wind_readings 
+    global average_bearing
+    global direction_name
+    with lock:
+        if wind_readings:
+            # 将风向角度转换为单位向量
+            unit_vectors = [(math.cos(math.radians(bearing)), 
+                              math.sin(math.radians(bearing)))
+                             for bearing in wind_readings]
+            
+            # 计算向量和
+            vector_sum = [sum(vectors[0] for vectors in unit_vectors),
+                          sum(vectors[1] for vectors in unit_vectors)]
+            
+            # 计算向量平均
+            average_bearing = math.degrees(math.atan2(vector_sum[1], vector_sum[0]))
+            average_bearing = (average_bearing + 360) % 360  # 将角度规范化到0-360范围内
+            
+            wind_readings = []  # 清空列表以收集下一分钟的数据
+            
+            # 根据平均风向移动摄像机到对应的预设位置
+            preset_number = bearing_to_direction(average_bearing)
+            go_to_preset(preset_number)
+            direction_name = direction_from_bearing(average_bearing)
+            print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f} degrees ({direction_name})")
+        else:
+            return  # 如果没有数据则返回
+
+    preset_number = bearing_to_direction(average_bearing)
+    #go_to_preset(preset_number)
+    #print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f}")
 
 
 
@@ -278,25 +320,56 @@ def direction_to_text(direction):
     index = int((direction + 22.5) // 45) % 8
     return directions[index]
 
+def bearing_to_direction(bearing):
+    # 将360度分成8个方位，每个方位45度，返回对应的预设位置编号
+    directions = [1, 2, 3, 4, 5, 6, 7, 8]  # 1:北, 2:东北, ..., 8:西北
+    index = int((bearing + 22.5) // 45)
+    return directions[index % 8]
+
+def direction_from_bearing(bearing):
+    # 将360度分成8个方位，每个方位45度，返回对应的方位名称
+    direction_names = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest']
+    index = int((bearing + 22.5) // 45)
+    return direction_names[index % 8]
+
 def update_table():
     c = conn.cursor()
-    # 拉取所有數據而不是只有最新的5條
     c.execute("SELECT * FROM wind_data ORDER BY timestamp DESC")
     displayed_data = c.fetchall()
     conn.commit()
-    # 要確保數據是按時間戳排序的，因此這裡使用 reversed 函數
-    #table.update_rows(list(reversed(displayed_data)))
-    update_plot()
+    
+    # 獲取最後一條數據的風向
+    if displayed_data:
+        last_wind_direction = displayed_data[0][1]
+    else:
+        last_wind_direction = 0
+    
+    # 使用最後一條數據的風向更新繪圖
+    update_plot(last_wind_direction)
 
+def calculate_bearing_from_wind(wind_direction, lat, lon):
+    # 將經緯度轉換為弧度
+    lat, lon = map(math.radians, [lat, lon])
 
-def update_plot():
+    # 將風向轉換為弧度
+    wind_direction = math.radians(wind_direction)
+
+    # 計算方位角
+    bearing = (wind_direction + math.pi) % (2 * math.pi)
+
+    # 將方位角轉換為度數並正規化到0-360度
+    bearing = math.degrees(bearing)
+
+    return bearing
+
+def update_plot(wind_direction):
     c = conn.cursor()
     c.execute("SELECT * FROM wind_data ORDER BY timestamp DESC LIMIT 50")
     displayed_data = c.fetchall()
     conn.commit()
     # 提取時間戳和原始方向數據
-    timestamps = [row[0] for row in displayed_data]  
-    raw_directions = [row[1] for row in displayed_data] 
+    timestamps = [row[0] for row in displayed_data]
+    raw_directions = [row[1] for row in displayed_data]
 
     # 清除現有數據
     fig.data = []
@@ -315,16 +388,17 @@ def update_plot():
         xaxis=dict(title='Time', showgrid=True, gridcolor='lightgray'),
         yaxis=dict(title='Wind Direction (°)', range=[0, 360], showgrid=True, gridcolor='lightgray'),
         margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False
+        showlegend=True
     )
 
-   # 更新 plotly 元件
+    # 更新 plotly 元件
     plot.update()
 
 
 
 def ensure_directory_exists(path):
     os.makedirs(path, exist_ok=True)
+
 
 def download_csv(start_date, end_date, custom_filename):
     directory = './data'
@@ -399,8 +473,17 @@ def adjust_camera_based_on_wind():
 
 
 # 每分钟执行一次调整相机位置的操作
-schedule.every().minute.do(adjust_camera_based_on_wind)
 
+schedule.every().minute.do(process_wind_data)
+def periodic_task():
+    schedule.run_pending()
+
+
+# 使用 NiceGUI 的 ui.timer 設定每秒執行一次 periodic_task 函數
+ui.timer(1, periodic_task)
+
+# 啟動 NiceGUI 界面
+ui.run(title='Wind Direction Monitoring System')
 #while True:
 #    schedule.run_pending()
 #    time.sleep(1)
@@ -413,3 +496,4 @@ setup_mqtt_client()
 
 # 啟動NiceGUI界面
 ui.run(title='Wind Direction Monitoring System') 
+
