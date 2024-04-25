@@ -48,6 +48,18 @@ profile_token = None
 camera_lat = None
 camera_lon = None
 
+# 全局变量存储最新的图像文件名
+latest_filename = ''
+
+def update_image():
+    global latest_filename
+    if latest_filename and os.path.isfile(latest_filename):
+        image.set_source(latest_filename)  # 正確的方法來更新圖像來源
+        print(f'Updated UI with {latest_filename}')
+    else:
+        print(f'File not found: {latest_filename}')
+
+
 def initialize_camera():
     global camera, ptz_service, profile_token
     try:
@@ -66,23 +78,17 @@ def initialize_camera():
 
 def go_to_preset(preset_number):
     global camera, ptz_service, profile_token
-    initialize_camera()
     try:
-        camera = ONVIFCamera(camera_ip.value, int(camera_port.value), camera_user.value, camera_password.value)
         if camera is None or ptz_service is None or profile_token is None:
             initialize_camera()
-            if camera is None or ptz_service is None or profile_token is None:
-                raise Exception("Camera not initialized or PTZ service/profile token not obtained")
-
         request = ptz_service.create_type('GotoPreset')
         request.ProfileToken = profile_token
         request.PresetToken = str(preset_number)
         ptz_service.GotoPreset(request)
-        ui.notify(f'Moved to Preset {preset_number}based on average wind direction {average_bearing:.2f} degrees ({direction_name}', type='positive')
+        ui.notify(f'Moved to Preset {preset_number} based on average wind direction {average_bearing:.2f} degrees ({direction_name})', type='positive')
     except Exception as e:
         ui.notify(f'Error moving to preset {preset_number}: {str(e)}', type='negative')
-        print(f'Error moving to preset {preset_number}: {str(e)}')  # Log to console for debugging
-
+        print(f'Error moving to preset {preset_number}: {str(e)}')
 
 
 # 創建鎖對象以確保線程安全
@@ -118,32 +124,22 @@ def save_settings():
 
 
 def capture_frame(rtsp_url, image_save_path, capture_interval):
-    # 設定時間戳記的格式
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_size = 0.5
-    font_color = (255, 255, 255)  # 白色
-    thickness = 1
-
-    # 開始讀取 RTSP 串流
+    global latest_filename
     cap = cv2.VideoCapture(rtsp_url)
-
     ret, frame = cap.read()
     if ret:
-        # 自動增加資料夾
-        if not os.path.exists(image_save_path):
-            os.makedirs(image_save_path)
-
-        # 在影像上加入時間戳記
-        current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-        text_size, _ = cv2.getTextSize(current_time, font, font_size, thickness)
-        cv2.putText(frame, current_time, (frame.shape[1] - text_size[0] - 10, frame.shape[0] - 10), font, font_size, font_color, thickness)
-
+        filename = f'{image_save_path}/frame_{time.strftime("%Y%m%d-%H%M%S", time.localtime())}.jpg'
         cv2.imwrite(filename, frame)
-        print(f'Saved {filename}')
+        latest_filename = filename  # 更新最新文件名
+        cap.release()
+        return filename
     else:
         print('Error capturing frame')
+        cap.release()
+        return None
+    
 
-    cap.release()
+
 
 
 # 建立 UI
@@ -238,7 +234,7 @@ fig = go.Figure()
 fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
 plot = ui.plotly(fig).classes('w-full h-64')
 splitter = ui.splitter(horizontal=False).classes('w-full')
-
+image = ui.image()
 with splitter.before:
     ui.label('This is some content on the left hand side.').classes('mr-4')
     table = ui.table(
@@ -251,18 +247,17 @@ with splitter.before:
         pagination=10  # 每頁顯示10條數據
     )                   
 
+# Set a timer to call update_image every 30 seconds
+
 with splitter.after:
     ui.label('This is some content on the right hand side.').classes('ml-8')
     rtsp_url = f'rtsp://{camera_user.value}:{camera_password.value}@{camera_ip.value}:554/stream1'
     image_save_path = os.path.expanduser('./images')
-    capture_interval = 60
-    filename = f'{image_save_path}/frame_{time.strftime("%Y%m%d-%H%M%S", time.localtime())}.jpg'
-    capture_frame(rtsp_url, image_save_path, capture_interval)
-    if os.path.isfile(filename):
-        ui.image(filename).classes('w-128')
-    else:
-        print(f'File not found: {filename}')
-
+    image = ui.image().classes('w-full')
+    capture_interval = 60  # 例如每60秒捕获一次
+    filename = f'{image_save_path}/frame_{time.strftime("%Y%m%d-%H%M%S", time.localtime())}.jpg'  
+    # 设置定时器，传递所有必需的参数
+    ui.timer(capture_interval, lambda: capture_frame(rtsp_url, image_save_path, capture_interval))
 
 
 # 設定MQTT客戶端
@@ -333,38 +328,25 @@ def on_message(client, userdata, msg):
 
 import math
 
+
 def process_wind_data():
-    global wind_readings 
-    global average_bearing
-    global direction_name
+    global wind_readings, average_bearing, direction_name
     with lock:
         if wind_readings:
-            # 将风向角度转换为单位向量
-            unit_vectors = [(math.cos(math.radians(bearing)), 
-                              math.sin(math.radians(bearing)))
-                             for bearing in wind_readings]
-            
-            # 计算向量和
-            vector_sum = [sum(vectors[0] for vectors in unit_vectors),
-                          sum(vectors[1] for vectors in unit_vectors)]
-            
-            # 计算向量平均
+            unit_vectors = [(math.cos(math.radians(bearing)), math.sin(math.radians(bearing))) for bearing in wind_readings]
+            vector_sum = [sum(vectors[0] for vectors in unit_vectors), sum(vectors[1] for vectors in unit_vectors)]
             average_bearing = math.degrees(math.atan2(vector_sum[1], vector_sum[0]))
-            average_bearing = (average_bearing + 360) % 360  # 将角度规范化到0-360范围内
-            
-            wind_readings = []  # 清空列表以收集下一分钟的数据
-            
-            # 根据平均风向移动摄像机到对应的预设位置
+            average_bearing = (average_bearing + 360) % 360  # 规范化到 0-360 度
+            direction_name = direction_from_bearing(average_bearing)
             preset_number = bearing_to_direction(average_bearing)
             go_to_preset(preset_number)
-            direction_name = direction_from_bearing(average_bearing)
             print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f} degrees ({direction_name})")
+            wind_readings = []  # 清空列表以收集下一分钟的数据
         else:
             return  # 如果没有数据则返回
-    #測試
-    preset_number = bearing_to_direction(average_bearing)
-    #go_to_preset(preset_number)
-    #print(f"Camera moved to preset {preset_number} based on average wind direction {average_bearing:.2f}")
+
+# 在定时器中使用 capture_frame 函数时确保参数完整
+ui.timer(60, lambda: capture_frame(rtsp_url, image_save_path, capture_interval))
 
 
 
@@ -535,11 +517,6 @@ def periodic_task():
 # 使用 NiceGUI 的 ui.timer 設定每秒執行一次 periodic_task 函數
 ui.timer(1, periodic_task)
 
-# 啟動 NiceGUI 界面
-ui.run(title='Wind Direction Monitoring System')
-#while True:
-#    schedule.run_pending()
-#    time.sleep(1)
 
 # 初始化設定
 load_settings()
@@ -547,6 +524,7 @@ load_settings()
 # 啟動MQTT客戶端
 setup_mqtt_client()
 
+# 每30秒更新一次图像显示
+ui.timer(30, update_image)
 # 啟動NiceGUI界面
 ui.run(title='Wind Direction Monitoring System') 
-
