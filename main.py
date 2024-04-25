@@ -147,6 +147,7 @@ def capture_frame(rtsp_url, image_save_path, capture_interval):
 
         cv2.imwrite(filename, frame)
         latest_filename = filename  # 更新最新文件名
+        print(latest_filename)
         cap.release()
         return filename
     else:
