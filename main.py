@@ -21,6 +21,9 @@ import time
 import schedule
 import os
 import csv
+import cv2
+import time
+
 
 
 # 全局變量
@@ -31,6 +34,10 @@ profile_token = 1
 wind_readings = []  # 用於存儲每分鐘內收集的風向數據
 lock = Lock()  # 用於線程安全地訪問風向數據
 
+#rtsp_url = f'rtsp://{camera_user.value}:{camera_password.value}@{camera_ip.value}:554/stream1'
+#image_save_path = os.path.expanduser('./images')
+#capture_interval = 60
+#capture_frame(rtsp_url, image_save_path, capture_interval)
 
 # 全局變量，用於存儲相機和PTZ服務
 camera = None
@@ -108,6 +115,35 @@ def save_settings():
     with open('settings.json', 'w') as f:
         json.dump(settings, f)
     setup_mqtt_client()  # 使用新設定重啟MQTT客戶端
+
+
+def capture_frame(rtsp_url, image_save_path, capture_interval):
+    # 設定時間戳記的格式
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_size = 0.5
+    font_color = (255, 255, 255)  # 白色
+    thickness = 1
+
+    # 開始讀取 RTSP 串流
+    cap = cv2.VideoCapture(rtsp_url)
+
+    ret, frame = cap.read()
+    if ret:
+        # 自動增加資料夾
+        if not os.path.exists(image_save_path):
+            os.makedirs(image_save_path)
+
+        # 在影像上加入時間戳記
+        current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        text_size, _ = cv2.getTextSize(current_time, font, font_size, thickness)
+        cv2.putText(frame, current_time, (frame.shape[1] - text_size[0] - 10, frame.shape[0] - 10), font, font_size, font_color, thickness)
+
+        cv2.imwrite(filename, frame)
+        print(f'Saved {filename}')
+    else:
+        print('Error capturing frame')
+
+    cap.release()
 
 
 # 建立 UI
@@ -197,20 +233,37 @@ with ui.tab_panels(tabs).classes('w-full'):
 
             # 下載按鈕
             ui.button('Download CSV', on_click=lambda: download_csv(start_date.value, end_date.value, ''))
-    
-        # 初始化圖表
+# 初始化圖表
 fig = go.Figure()
 fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-plot = ui.plotly(fig).classes('w-3/4 h-64')
-table = ui.table(
-    columns=[
-        {'field': 'timestamp', 'label': 'Timestamp'},
-        {'field': 'raw_direction', 'label': 'Wind Direction'},
-        {'field': 'direction_text', 'label': 'Wind Direction'}
-    ],
-    rows=wind_history,
-    pagination=10  # 每頁顯示10條數據
-)
+plot = ui.plotly(fig).classes('w-full h-64')
+splitter = ui.splitter(horizontal=False).classes('w-full')
+
+with splitter.before:
+    ui.label('This is some content on the left hand side.').classes('mr-4')
+    table = ui.table(
+        columns=[
+            {'field': 'timestamp', 'label': 'Timestamp'},
+            {'field': 'raw_direction', 'label': 'Wind Direction'},
+            {'field': 'direction_text', 'label': 'Wind Direction'}
+        ],
+        rows=wind_history,
+        pagination=10  # 每頁顯示10條數據
+    )                   
+
+with splitter.after:
+    ui.label('This is some content on the right hand side.').classes('ml-8')
+    rtsp_url = f'rtsp://{camera_user.value}:{camera_password.value}@{camera_ip.value}:554/stream1'
+    image_save_path = os.path.expanduser('./images')
+    capture_interval = 60
+    filename = f'{image_save_path}/frame_{time.strftime("%Y%m%d-%H%M%S", time.localtime())}.jpg'
+    capture_frame(rtsp_url, image_save_path, capture_interval)
+    if os.path.isfile(filename):
+        ui.image(filename).classes('w-128')
+    else:
+        print(f'File not found: {filename}')
+
+
 
 # 設定MQTT客戶端
 def setup_mqtt_client():

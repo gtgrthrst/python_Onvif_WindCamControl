@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"name": "python_Onvif_WindCamControl",
+			"path": "."
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}
