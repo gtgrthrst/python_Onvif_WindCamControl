@@ -125,10 +125,26 @@ def save_settings():
 
 def capture_frame(rtsp_url, image_save_path, capture_interval):
     global latest_filename
+        # 設定時間戳記的格式
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_size = 0.5
+    font_color = (255, 255, 255)  # 白色
+    thickness = 1
+
+    # 開始讀取 RTSP 串流
     cap = cv2.VideoCapture(rtsp_url)
+
     ret, frame = cap.read()
     if ret:
+        # 自動增加資料夾
+        if not os.path.exists(image_save_path):
+            os.makedirs(image_save_path)
         filename = f'{image_save_path}/frame_{time.strftime("%Y%m%d-%H%M%S", time.localtime())}.jpg'
+        # 在影像上加入時間戳記
+        current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        text_size, _ = cv2.getTextSize(current_time, font, font_size, thickness)
+        cv2.putText(frame, current_time, (frame.shape[1] - text_size[0] - 10, frame.shape[0] - 10), font, font_size, font_color, thickness)
+
         cv2.imwrite(filename, frame)
         latest_filename = filename  # 更新最新文件名
         cap.release()
