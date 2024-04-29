@@ -201,11 +201,12 @@ with ui.tab_panels(tabs).classes('w-full'):
                     # 創建滑塊，移除不支持的 'label' 參數
                     slider =  preset_position = ui.slider(min=1, max=8, step=1, value=1)
                     ui.label().bind_text_from(slider, 'value')
+                    # 新增ONVIF測試按鈕
+                    ui.button('Test ONVIF Connection', on_click=lambda: test_onvif_connection())
                     # 創建按鈕來觸發轉到預設位置的操作
                     ui.button('Go to Preset Position', on_click=lambda: go_to_preset(preset_position.value))
 
-                    # 新增ONVIF測試按鈕
-                    ui.button('Test ONVIF Connection', on_click=lambda: test_onvif_connection())
+                   
                     ui.button('Back', on_click=stepper.previous).props('flat')
 
 
@@ -486,6 +487,7 @@ ui.html('<style>.multi-line-notification { white-space: pre-line; }</style>')
 def test_onvif_connection():
     try:
         # 用當前輸入值初始化相機
+        initialize_camera()
         camera = ONVIFCamera(camera_ip.value, int(camera_port.value), camera_user.value, camera_password.value)
         device_info = camera.devicemgmt.GetDeviceInformation()
         
@@ -507,7 +509,7 @@ def test_onvif_connection():
         print(f'ONVIF Connection Exception: {str(e)}')
 
 # 示例按鈕來測試連接
-ui.button('Test Connection', on_click=test_onvif_connection)
+#ui.button('Test Connection', on_click=test_onvif_connection)
 
 def on_camera_ip_change(event):
     # 重新初始化相機連接
