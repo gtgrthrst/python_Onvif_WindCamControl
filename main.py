@@ -77,7 +77,7 @@ def initialize_camera():
 
 
 def go_to_preset(preset_number):
-    global camera, ptz_service, profile_token
+    global camera, ptz_service, profile_token, average_bearing
     try:
         if camera is None or ptz_service is None or profile_token is None:
             initialize_camera()
@@ -130,7 +130,7 @@ def capture_frame(rtsp_url, image_save_path, capture_interval):
     font_size = 0.5
     font_color = (255, 255, 255)  # 白色
     thickness = 1
-
+    rtsp_url = f'rtsp://{camera_user.value}:{camera_password.value}@{camera_ip.value}:554/stream1'
     # 開始讀取 RTSP 串流
     cap = cv2.VideoCapture(rtsp_url)
 
